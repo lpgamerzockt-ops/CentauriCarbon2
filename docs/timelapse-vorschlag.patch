@@ -1,0 +1,188 @@
+*** Phase 2 PROPOSAL ONLY — do NOT apply without Manuel's approval ***
+*** Target branch: optimierung ***
+*** Safe package: encoder quality + buffers; resolution stays 640x360 unless TIMELAPSE_WIDTH/HEIGHT overridden ***
+
+diff --git a/debugfile/printer.cfg b/debugfile/printer.cfg
+--- a/debugfile/printer.cfg
++++ b/debugfile/printer.cfg
+@@ -1,3 +1,22 @@
++# ---------------------------------------------------------------------------
++# [timelapse] — PROPOSED (Phase 2). Not parsed by firmware until Phase 3 wires it.
++# Defaults below match the proposed safe quality raise (still 640x360 capture).
++# Uncomment and implement config loading before relying on these at runtime.
++#
++# [timelapse]
++# width: 640
++# height: 360
++# output_fps: 30
++# bit_rate: 4000000
++# preset: medium
++# crf: 20
++# profile: main
++# level: 3.1
++# pic_max_size: 307200
++# keep_source_jpegs: False
++# ---------------------------------------------------------------------------
++
+ # (existing printer.cfg content continues unchanged)
+ 
+diff --git a/elegoo/extras/ai_camera/module/camera/timelapse_quality.h b/elegoo/extras/ai_camera/module/camera/timelapse_quality.h
+new file mode 100644
+--- /dev/null
++++ b/elegoo/extras/ai_camera/module/camera/timelapse_quality.h
+@@ -0,0 +1,48 @@
++/*****************************************************************************
++ * Proposed central timelapse quality knobs (Phase 2 proposal).
++ * Until printer.cfg parsing is wired, these compile-time defaults apply.
++ * Stock baseline was: 640x360, VIDEO_FPS 30, bit_rate 2Mbps, preset ultrafast,
++ * no CRF, PIC_MAX_SIZE 100KiB.
++ *****************************************************************************/
++#pragma once
++
++/* Capture / encode geometry — keep 640x360 until camera enum confirms higher. */
++#ifndef TIMELAPSE_WIDTH
++#define TIMELAPSE_WIDTH 640
++#endif
++#ifndef TIMELAPSE_HEIGHT
++#define TIMELAPSE_HEIGHT 360
++#endif
++
++#ifndef TIMELAPSE_OUTPUT_FPS
++#define TIMELAPSE_OUTPUT_FPS 30
++#endif
++
++/* H.264 encode */
++#ifndef TIMELAPSE_BIT_RATE
++#define TIMELAPSE_BIT_RATE 4000000
++#endif
++#ifndef TIMELAPSE_X264_PRESET
++#define TIMELAPSE_X264_PRESET "medium"
++#endif
++#ifndef TIMELAPSE_X264_TUNE
++#define TIMELAPSE_X264_TUNE "stillimage"
++#endif
++#ifndef TIMELAPSE_X264_PROFILE
++#define TIMELAPSE_X264_PROFILE "main"
++#endif
++#ifndef TIMELAPSE_X264_LEVEL
++#define TIMELAPSE_X264_LEVEL "3.1"
++#endif
++#ifndef TIMELAPSE_CRF
++#define TIMELAPSE_CRF 20
++#endif
++
++/* MJPEG frame buffer (was 100*1024) */
++#ifndef TIMELAPSE_PIC_MAX_SIZE
++#define TIMELAPSE_PIC_MAX_SIZE (300 * 1024)
++#endif
++
++#ifndef TIMELAPSE_KEEP_SOURCE_JPEGS
++#define TIMELAPSE_KEEP_SOURCE_JPEGS 0
++#endif
+diff --git a/elegoo/extras/ai_camera/module/camera/time_lapse_photo.h b/elegoo/extras/ai_camera/module/camera/time_lapse_photo.h
+--- a/elegoo/extras/ai_camera/module/camera/time_lapse_photo.h
++++ b/elegoo/extras/ai_camera/module/camera/time_lapse_photo.h
+@@ -11,9 +11,12 @@
+ #pragma once
+ 
+ #include <iostream>
++#include "timelapse_quality.h"
+ 
+ namespace znp {
+-#define PIC_MAX_SIZE 1 * 100 * 1024
++#ifndef PIC_MAX_SIZE
++#define PIC_MAX_SIZE TIMELAPSE_PIC_MAX_SIZE
++#endif
+ #define TIME_LAPSE_PIC_PATH "/opt/usr/picture/"
+ #define TIME_LAPSE_VIDEO_PATH "/opt/usr/video/"
+ 
+diff --git a/elegoo/extras/ai_camera/module/camera/uvc_config_info.h b/elegoo/extras/ai_camera/module/camera/uvc_config_info.h
+--- a/elegoo/extras/ai_camera/module/camera/uvc_config_info.h
++++ b/elegoo/extras/ai_camera/module/camera/uvc_config_info.h
+@@ -13,12 +13,14 @@
+ #include <linux/videodev2.h>
+ #include <iostream>
+ #include <string>
++#include "timelapse_quality.h"
+ 
+ #define CAMERA_FPS 20
+-#define VIDEO_FPS 30
++#define VIDEO_FPS TIMELAPSE_OUTPUT_FPS
+ #define CAMERA_UART_BOAD 115200
+-#define CAMERA_FARME_WIDTH 640
+-#define CAMERA_FARME_HIGHT 360
++#define CAMERA_FARME_WIDTH TIMELAPSE_WIDTH
++#define CAMERA_FARME_HIGHT TIMELAPSE_HEIGHT
+ #define CAMERA_UART_TIMEOUT_MS 5*1000
+ #define CAMERA_UART_OFFLINE_MS 10*1000
+diff --git a/elegoo/extras/ai_camera/module/camera/video_list.h b/elegoo/extras/ai_camera/module/camera/video_list.h
+--- a/elegoo/extras/ai_camera/module/camera/video_list.h
++++ b/elegoo/extras/ai_camera/module/camera/video_list.h
+@@ -20,8 +20,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ }
++#include "timelapse_quality.h"
+ 
+ #define LINK_LIST_LENGTH (4)
+-#define SIZE_OF_FRAME (100*1024)
++#define SIZE_OF_FRAME (TIMELAPSE_PIC_MAX_SIZE)
+ 
+ typedef enum {
+   FRAME_START = 0,  // 数据帧的开始标志
+diff --git a/elegoo/extras/ai_camera/module/camera/ai_camera.cpp b/elegoo/extras/ai_camera/module/camera/ai_camera.cpp
+--- a/elegoo/extras/ai_camera/module/camera/ai_camera.cpp
++++ b/elegoo/extras/ai_camera/module/camera/ai_camera.cpp
+@@ -430,12 +430,14 @@ void AICamera<CameraT>::TimeLapseComposite(json &params, json &j_respond) {
+                 encoder.reset();
+ 
+                 cmd = "rm -rf " + pic_dir_link;
+                 SPDLOG_INFO("cmd {}", cmd);
+                 std::system(cmd.c_str());
+ 
+-                cmd = "rm -rf \'" + pic_dir + "\'";
+-                SPDLOG_INFO("cmd {}", cmd);
+-                std::system(cmd.c_str());
++                #if !TIMELAPSE_KEEP_SOURCE_JPEGS
++                cmd = "rm -rf \'" + pic_dir + "\'";
++                SPDLOG_INFO("cmd {}", cmd);
++                std::system(cmd.c_str());
++                #endif
+             }
+         #endif
+     else
+diff --git a/elegoo/extras/ai_camera/module/util/video_encoder.cpp b/elegoo/extras/ai_camera/module/util/video_encoder.cpp
+--- a/elegoo/extras/ai_camera/module/util/video_encoder.cpp
++++ b/elegoo/extras/ai_camera/module/util/video_encoder.cpp
+@@ -28,6 +28,7 @@
+ #include <cstdlib>
+ 
+ #include "video_encoder.h"
++#include "timelapse_quality.h"
+ #define STB_IMAGE_IMPLEMENTATION
+ #include "stb_image.h"
+ 
+@@ -109,19 +110,21 @@ bool ImageToVideoEncoder::encode_from_directory(
+ #else
+     ptrs_->codec_ctx->width = width_;
+     ptrs_->codec_ctx->height = height_;
+     ptrs_->codec_ctx->time_base = {1, fps_};
+     ptrs_->codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+-    ptrs_->codec_ctx->bit_rate = 2000000;
++    ptrs_->codec_ctx->bit_rate = TIMELAPSE_BIT_RATE;
+     ptrs_->codec_ctx->gop_size = 30;
+     ptrs_->codec_ctx->max_b_frames = 3;
+ 
+-    av_opt_set(ptrs_->codec_ctx->priv_data, "preset", "ultrafast", 0);
+-    av_opt_set(ptrs_->codec_ctx->priv_data, "tune", "stillimage", 0);
+-    av_opt_set(ptrs_->codec_ctx->priv_data, "profile", "baseline", 0);
+-    av_opt_set(ptrs_->codec_ctx->priv_data, "level", "3.0", 0);
++    av_opt_set(ptrs_->codec_ctx->priv_data, "preset", TIMELAPSE_X264_PRESET, 0);
++    av_opt_set(ptrs_->codec_ctx->priv_data, "tune", TIMELAPSE_X264_TUNE, 0);
++    av_opt_set(ptrs_->codec_ctx->priv_data, "profile", TIMELAPSE_X264_PROFILE, 0);
++    av_opt_set(ptrs_->codec_ctx->priv_data, "level", TIMELAPSE_X264_LEVEL, 0);
++    av_opt_set_int(ptrs_->codec_ctx->priv_data, "crf", TIMELAPSE_CRF, 0);
+     av_opt_set(ptrs_->codec_ctx->priv_data, "speed", "10", 0);
+     av_opt_set(ptrs_->codec_ctx->priv_data, "keyint_min", "60", 0);
+     av_opt_set(ptrs_->codec_ctx->priv_data, "sc_threshold", "0", 0);
+ #endif
