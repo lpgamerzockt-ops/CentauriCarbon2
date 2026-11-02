@@ -1,0 +1,5 @@
+# local agent artifacts
+
+# Phase 0 local full archive (not for git; store uses split parts)
+.phase0-backup/
+*.tar.gz
